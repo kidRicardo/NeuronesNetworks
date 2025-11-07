@@ -1,0 +1,294 @@
+---
+title: "Projet Deep Learning – Fashion-MNIST"
+author: "Ricardo Tchakounte Kuebia | Ketty ISHIMWE | Benitha Liesse MANIRAKIZA – M2 ISMAG"
+date: "2025-10-06"
+output:
+  word_document:
+    toc: true
+  html_document:
+    toc: true
+    fig_caption: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+	echo = TRUE,
+	message = TRUE,
+	warning = TRUE
+)
+# Chargement des bibliothèques
+library(reticulate)
+library(keras)
+library(tensorflow)
+library(caret)
+
+tensorflow::tf_config()
+options(keras.view_metrics = FALSE)
+```
+
+
+## 1. Introduction
+
+L’objectif de ce projet est de **mettre en concurrence plusieurs architectures de réseaux de neurones** – du perceptron simple de Rosenblatt aux réseaux convolutifs – afin d’identifier celle qui obtient **la meilleure reconnaissance de vêtements** sur le jeu de données *Fashion-MNIST*.
+
+**60 000 images** sont utilisées pour l’apprentissage et **10 000 pour le test**. La différence est que les cibles ne représentent pas des chiffres manuscrits mais **10 catégories de vêtements** (T-shirt, pantalon, robe, sac, bottine…).
+
+## 2. Chargement et mise en forme des données
+
+```{r data-prep}
+# Chargement du dataset Fashion-MNIST
+fashion <- dataset_fashion_mnist()
+
+# Séparation apprentissage / test
+X_train <- fashion$train$x
+y_train <- fashion$train$y 
+X_test <- fashion$test$x
+y_test <- fashion$test$y  
+
+# Les images sont 28x28 en niveaux de gris : on ajoute le canal (=1)
+X_train <- array_reshape(X_train, c(nrow(X_train), 28, 28, 1))
+X_test <- array_reshape(X_test, c(nrow(X_test), 28, 28, 1))
+
+# Noms lisibles des classes
+class_names <- c(
+  "T-shirt/top", "Trouser", "Pullover", "Dress", "Coat",
+  "Sandal", "Shirt", "Sneaker", "Bag", "Ankle boot"
+)
+
+dim(X_train); dim(X_test)
+```
+
+## 3. Modèle 1 : perceptron simple (Rosenblatt, 1957)
+
+Ce premier modèle sert de **référence minimale**. On “aplatit” l’image 28×28 en un vecteur de 784 pixels et on envoie directement vers 10 neurones de sortie  avec une activation `softmax`.
+
+```{r model-perceptron}
+inputs <- keras::layer_input(shape = c(28, 28, 1))
+
+outputs <- inputs |>
+  keras::layer_flatten() |>
+  keras::layer_dense(units = 10, activation = "softmax")
+
+model_p1 <- keras::keras_model(inputs = inputs, outputs = outputs)
+
+keras::compile(
+  object = model_p1,
+  optimizer = "adam",
+  loss = "sparse_categorical_crossentropy", 
+  metrics = "accuracy"
+)
+
+history_p1 <- keras::fit(
+  object = model_p1,
+  x = X_train,
+  y = y_train,
+  epochs = 5,
+  batch_size = 128,
+  validation_split = 0.2,
+  verbose = 0,
+  callbacks = NULL
+)
+
+res_p1 <- keras::evaluate(model_p1, X_test, y_test, verbose = 0)
+res_p1
+```
+
+```{r}
+summary(model_p1)
+```
+# Prédictions sur le test
+```{r}
+# proba pour chaque classe
+pred_probs   <- model_p1 %>% predict(X_test, verbose = 0)
+
+# classe prédite = indice du max (0..9)
+pred_classes <- apply(pred_probs, 1, which.max) - 1
+
+# y_test est un vecteur d'entiers 0..9
+true_classes <- y_test
+
+class_names <- c(
+  "T-shirt/top", "Trouser", "Pullover", "Dress", "Coat",
+  "Sandal", "Shirt", "Sneaker", "Bag", "Ankle boot"
+)
+```
+
+# Afficher quelques images avec prédictions
+```{r}
+par(mfrow = c(3,5), mar = c(1,1,3,1))  # 3 lignes, 5 colonnes
+
+for (i in 1:15) {
+  img <- X_test[i,,,1]  # ← on affiche bien le TEST
+  true_lab <- class_names[ true_classes[i] + 1 ]
+  pred_lab <- class_names[ pred_classes[i] + 1 ]
+  correct  <- (true_lab == pred_lab)
+  
+  image(t(apply(img, 2, rev)), col = gray.colors(256), axes = FALSE)
+  title(
+    main = paste0("True: ", true_lab, "\nPred: ", pred_lab),
+    col.main = ifelse(correct, "darkgreen", "red"),
+    cex.main = 0.8
+  )
+}
+
+```
+
+
+**Interprétation: ** ce modèle est linéaire → il ne voit pas la structure spatiale de l’image → il fait souvent **85 % ± 2 %** de bien classés.
+
+## 4. Modèle 2 : perceptron multicouche (MLP)
+
+Pour améliorer le premier modèle, on ajoute **des couches cachées non linéaires**. Cela permet de traiter un problème non-linéaire et de construire des représentations intermédiaires.
+
+```{r model-mlp}
+inputs <- keras::layer_input(shape = c(28, 28, 1))
+
+outputs <- inputs |>
+keras::layer_flatten() |>
+keras::layer_dense(256, activation = "relu") |>
+keras::layer_dropout(0.3) |>
+keras::layer_dense(128, activation = "relu") |>
+keras::layer_dense(10, activation = "softmax")
+
+model_mlp <- keras::keras_model(inputs = inputs, outputs = outputs)
+
+keras::compile(
+model_mlp,
+optimizer = "adam",
+loss = "sparse_categorical_crossentropy",
+metrics = "accuracy"
+)
+
+history_mlp <- keras::fit(
+model_mlp,
+X_train, y_train,
+epochs = 10,
+batch_size = 128,
+validation_split = 0.2,
+verbose = 0,
+callbacks = NULL
+)
+
+res_mlp <- keras::evaluate(model_mlp, X_test, y_test, verbose = 0)
+```
+```{r}
+summary(model_mlp)
+```
+
+
+**Commentaires :**
+- l’ajout de `dropout` permet de ne pas garder exactement la même structure d'influence entre les noeuds d'une itération à une autre pour plus de résilience, on applique ici un taux de dropout de 0.3 : il limite le surapprentissage ;
+- on s’attend ici à **88–91 %** de bonne classification ;
+- c’est déjà mieux que le perceptron, mais on n’utilise toujours pas la structure 2D de l’image.
+
+## 5. Modèle 3 : réseau de neurones convolutif (CNN)
+
+C’est le modèle **attendu comme lauréat**. Il applique des filtres de convolution qui détectent bords, motifs et textures, puis réduit la dimension avec du max-pooling.
+
+```{r model-cnn}
+inputs <- keras::layer_input(shape = c(28, 28, 1))
+
+outputs <- inputs |>
+keras::layer_conv_2d(32, c(3,3), activation = "relu") |>
+keras::layer_max_pooling_2d(c(2,2)) |>
+keras::layer_conv_2d(64, c(3,3), activation = "relu") |>
+keras::layer_max_pooling_2d(c(2,2)) |>
+keras::layer_flatten() |>
+keras::layer_dense(128, activation = "relu") |>
+keras::layer_dense(10, activation = "softmax")
+
+model_cnn <- keras::keras_model(inputs = inputs, outputs = outputs)
+
+keras::compile(
+model_cnn,
+optimizer = "adam",
+loss = "sparse_categorical_crossentropy",
+metrics = "accuracy"
+)
+
+history_cnn <- keras::fit(
+model_cnn,
+X_train, y_train,
+epochs = 10,
+batch_size = 64,
+validation_split = 0.2,
+verbose = 0,
+callbacks = NULL
+)
+
+res_cnn <- keras::evaluate(model_cnn, X_test, y_test, verbose = 0)
+```
+```{r}
+summary(model_cnn)
+```
+
+
+**Commentaires :**
+- ce modèle est très proche de celui du corrigé MNIST ;
+- sur Fashion-MNIST, on obtient souvent **92–93 %** ;
+- c’est logiquement le **modèle à retenir**.
+
+## 6. Comparaison synthétique des trois réseaux
+
+```{r compare, echo=FALSE}
+results <- data.frame(
+  Modele = c("Perceptron (linéaire)", "MLP (2 couches cachées)", "CNN (2 blocs conv+pool)"),
+  Accuracy_test = c(res_p1["accuracy"], res_mlp["accuracy"], res_cnn["accuracy"])
+)
+knitr::kable(results, digits = 4, caption = "Comparaison des performances sur l'échantillon test")
+```
+
+On observe la même hiérarchie que dans le document de référence :
+1. le réseau le plus simple dépasse déjà 80 % ;
+2. le MLP gagne quelques points grâce à la non-linéarité ;
+3. le CNN surpasse les autres car il exploite la structure spatiale de l’image.
+
+## 7. Prédictions du modèle lauréat et matrice de confusion
+
+On applique ici le **CNN** au test.
+
+```{r predictions}
+# Prédictions sans barre de progression (pour éviter l'erreur kerastools/progbar)
+pred <- model_cnn %>% predict(X_test, verbose = 0)
+
+# Classe prédite = indice du max
+pred_classes <- apply(pred, 1, which.max) - 1  # retour à 0-9
+true_classestrue_classes <- y_test
+
+
+# Matrice de confusion
+cm <- confusionMatrix(
+  factor(pred_classes, levels = 0:9, labels = class_names),
+  factor(true_classes, levels = 0:9, labels = class_names)
+)
+cm
+```
+
+Pour lire cette matrice :
+- la **diagonale** donne les classes bien reconnues ;
+- les lignes/colonnes avec de nombreux écarts indiquent les **confusions** ;
+- sur Fashion-MNIST, les confusions les plus fréquentes sont : `T-shirt/top` ↔ `Shirt`, `Coat` ↔ `Dress`.
+
+## 8. Analyse des classes les mieux / moins bien reconnues
+
+```{r best-worst}
+tab <- as.data.frame(cm$byClass)
+tab$Classe <- rownames(tab)
+
+# On trie par Sensitivity (rappel)
+tab <- tab[order(-tab$Sensitivity), c("Classe", "Sensitivity", "Pos Pred Value")]
+tab
+```
+
+**Interprétation attendue :**
+- très bien reconnues : `Trouser`, `Sandal`, `Bag`,`Ankle Boot` ;
+- moins bien reconnues : `Shirt`, `T-shirt/top`, `Pullover` ;
+- cela peut venir du fait que certaines catégories de vêtement se **ressemblent fortement** et que ceux qui se distinguent plus facilement ne créer pas d'ambiguïté.
+
+## 9. Conclusion
+
+1. **le perceptron de Rosenblatt** constitue une bonne base mais reste limité aux séparations linéaires ;
+2. **le MLP** améliore la performance en introduisant de la non-linéarité ;
+3. **le réseau de convolution** est le **lauréat**, car il est le seul à tirer parti de la structure 2D des images et donc à réduire les confusions entre classes proches.
+
+En pratique, le CNN gagne **plusieurs points de pourcentage** par rapport au perceptron et devient donc le meilleur choix pour une application de reconnaissance automatique de vêtements.
